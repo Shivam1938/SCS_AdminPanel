@@ -1,13 +1,14 @@
 "use client";
 
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
+import Image from "next/image";
 import { z } from "zod";
 import {
   changeProfileRole, createAddress, createNotification, createProfileUser, createTechnician,
-  saveAddress, saveBooking, saveNotification, saveReview, saveService, saveTechnician, updateProfile,
+  saveAddress, saveBooking, saveBookingPayment, saveNotification, saveReview, saveService, saveTechnician, updateProfile,
 } from "@/lib/mutations";
 import type { JsonRow } from "@/lib/data";
 
@@ -46,7 +47,8 @@ export function ServiceEditor({ row }: { row?: JsonRow }) {
       <div className="form-field"><label htmlFor="service-id">ID</label><input id="service-id" className="field" disabled={!!row} {...form.register("id")} />{form.formState.errors.id && <small className="error-text">{form.formState.errors.id.message}</small>}</div>
       <div className="form-field"><label htmlFor="service-name">Name</label><input id="service-name" className="field" {...form.register("name")} /></div>
       <div className="form-field"><label htmlFor="service-price">Price (₹)</label><input id="service-price" type="number" min="0" className="field" {...form.register("price")} /></div>
-      <div className="form-field"><label htmlFor="service-sort">Sort order</label><input id="service-sort" type="number" className="field" {...form.register("sort", { setValueAs: (value) => value === "" ? null : Number(value) })} /></div>
+      {row && <div className="form-field"><label htmlFor="service-sort">Sort order</label><input id="service-sort" type="number" className="field" {...form.register("sort", { setValueAs: (value) => value === "" ? null : Number(value) })} /></div>}
+      {!row && <p className="muted-cell">Display order is assigned automatically.</p>}
       <div className="form-field"><label htmlFor="service-rating">Rating</label><input id="service-rating" type="number" min="0" max="5" step="0.1" className="field" {...form.register("rating", { setValueAs: (value) => value === "" ? null : Number(value) })} /></div>
       <div className="form-field"><label htmlFor="service-bookings">Bookings count</label><input id="service-bookings" type="number" min="0" className="field" {...form.register("bookings_count", { setValueAs: (value) => value === "" ? null : Number(value) })} /></div>
       <div className="form-field"><label htmlFor="service-icon">Icon name</label><input id="service-icon" className="field" {...form.register("icon")} /></div>
@@ -126,7 +128,7 @@ export function CreateProfileUserEditor() {
 }
 
 const technicianSchema = z.object({
-  name: z.string().min(1, "Required").max(200), role_title: z.string().max(200), about: z.string().max(5000),
+  name: z.string().min(1, "Required").max(200), phone: z.string().max(50), role_title: z.string().max(200), about: z.string().max(5000),
   rating: z.coerce.number().min(0).max(5).nullable(), reviews_count: z.coerce.number().int().min(0).nullable(),
   jobs_completed: z.coerce.number().int().min(0).nullable(), years_experience: z.coerce.number().int().min(0).nullable(),
   on_time_percent: z.coerce.number().int().min(0).max(100).nullable(), skills: z.string().max(2000), verified: z.boolean(),
@@ -135,9 +137,11 @@ const technicianSchema = z.object({
 type TechnicianValues = z.infer<typeof technicianSchema>;
 export function TechnicianEditor({ row, profiles }: { row: JsonRow; profiles: { id: string; full_name: string | null; role: "customer" | "technician" }[] }) {
   const [message, setMessage] = useState(""); const [busy, setBusy] = useState(false);
+  const [photoPreview, setPhotoPreview] = useState("");
+  useEffect(() => () => { if (photoPreview) URL.revokeObjectURL(photoPreview); }, [photoPreview]);
   const router = useRouter();
   const form = useForm<z.input<typeof technicianSchema>, unknown, TechnicianValues>({ resolver: zodResolver(technicianSchema), defaultValues: {
-    name: String(row.name ?? ""), role_title: String(row.role_title ?? ""), about: String(row.about ?? ""), rating: row.rating == null ? null : Number(row.rating),
+    name: String(row.name ?? ""), phone: String(row.phone ?? ""), role_title: String(row.role_title ?? ""), about: String(row.about ?? ""), rating: row.rating == null ? null : Number(row.rating),
     reviews_count: row.reviews_count == null ? null : Number(row.reviews_count), jobs_completed: row.jobs_completed == null ? null : Number(row.jobs_completed),
     years_experience: row.years_experience == null ? null : Number(row.years_experience), on_time_percent: row.on_time_percent == null ? null : Number(row.on_time_percent),
     skills: Array.isArray(row.skills) ? row.skills.map(String).join(", ") : "", verified: Boolean(row.verified), profile_id: String(row.profile_id ?? ""),
@@ -145,10 +149,15 @@ export function TechnicianEditor({ row, profiles }: { row: JsonRow; profiles: { 
   async function submit(values: TechnicianValues) {
     setBusy(true); setMessage(""); const payload = new FormData(); payload.set("id", String(row.id)); Object.entries(values).forEach(([key, value]) => payload.set(key, value === null ? "" : String(value)));
     if (values.verified) payload.set("verified", "on");
-    try { await saveTechnician(payload); setMessage("Technician saved."); router.refresh(); } catch (error) { setMessage(error instanceof Error ? error.message : "Could not update technician."); } finally { setBusy(false); }
+    const photo = (document.getElementById(`technician-photo-${String(row.id)}`) as HTMLInputElement | null)?.files?.[0];
+    if (photo) payload.set("technician_photo", photo);
+    const removePhoto = document.getElementById(`remove-technician-photo-${String(row.id)}`) as HTMLInputElement | null;
+    if (removePhoto?.checked && !photo) payload.set("remove_avatar", "true");
+    try { await saveTechnician(payload); setMessage("Technician saved."); const input = document.getElementById(`technician-photo-${String(row.id)}`) as HTMLInputElement | null; if (input) input.value = ""; setPhotoPreview(""); router.refresh(); } catch (error) { setMessage(error instanceof Error ? error.message : "Could not update technician."); } finally { setBusy(false); }
   }
   return <EditorDialog title="Edit technician" buttonLabel="Edit technician"><form className="dialog-body" onSubmit={form.handleSubmit(submit)}><div className="form-grid">
-    <div className="form-field"><label>Name</label><input className="field" {...form.register("name")} /></div><div className="form-field"><label>Role title</label><input className="field" {...form.register("role_title")} /></div>
+    <div className="form-field"><label>Name</label><input className="field" {...form.register("name")} /></div><div className="form-field"><label>Phone number</label><input className="field" type="tel" autoComplete="tel" {...form.register("phone")} /></div><div className="form-field"><label>Role title</label><input className="field" {...form.register("role_title")} /></div>
+    <div className="form-field full"><label htmlFor={`technician-photo-${String(row.id)}`}>Technician photo</label><input id={`technician-photo-${String(row.id)}`} className="field" type="file" accept="image/png,image/jpeg,image/webp" onChange={(event) => setPhotoPreview(event.target.files?.[0] ? URL.createObjectURL(event.target.files[0]) : "")} />{photoPreview || typeof row.avatar_url === "string" ? <Image unoptimized src={photoPreview || String(row.avatar_url)} alt="Technician profile preview" width={80} height={80} style={{ objectFit: "cover", borderRadius: "50%", marginTop: 8 }} /> : <span className="muted-cell">No photo uploaded.</span>}{typeof row.avatar_url === "string" && <label className="check-row"><input id={`remove-technician-photo-${String(row.id)}`} type="checkbox" /> Remove current photo</label>}</div>
     <div className="form-field"><label>Rating</label><input className="field" type="number" min="0" max="5" step="0.1" {...form.register("rating", { setValueAs: (value) => value === "" ? null : Number(value) })} /></div>
     <div className="form-field"><label>Linked profile</label><select className="field" {...form.register("profile_id")}><option value="">No linked profile</option>{row.profile_id != null && !profiles.some((profile) => profile.id === String(row.profile_id)) && <option value={String(row.profile_id)}>Current linked profile (restricted)</option>}{profiles.map((profile) => <option key={profile.id} value={profile.id}>{profile.full_name || profile.id} · {profile.role}</option>)}</select></div>
     <div className="form-field"><label>Reviews count</label><input className="field" type="number" min="0" {...form.register("reviews_count", { setValueAs: (value) => value === "" ? null : Number(value) })} /></div>
@@ -162,7 +171,7 @@ export function TechnicianEditor({ row, profiles }: { row: JsonRow; profiles: { 
 }
 
 const createTechnicianSchema = z.object({
-  name: z.string().min(1, "Name is required").max(200), profile_id: z.union([z.literal(""), z.string().uuid()]),
+  name: z.string().min(1, "Name is required").max(200), phone: z.string().max(50), profile_id: z.union([z.literal(""), z.string().uuid()]),
   role_title: z.string().max(200), about: z.string().max(5000), skills: z.string().max(2000),
   rating: z.coerce.number().min(0).max(5).nullable(), reviews_count: z.coerce.number().int().min(0).nullable(),
   jobs_completed: z.coerce.number().int().min(0).nullable(), years_experience: z.coerce.number().int().min(0).nullable(),
@@ -172,15 +181,21 @@ type CreateTechnicianInput = z.input<typeof createTechnicianSchema>;
 type CreateTechnicianValues = z.output<typeof createTechnicianSchema>;
 export function TechnicianCreateEditor({ profiles }: { profiles: { id: string; full_name: string | null; role: "customer" | "technician" }[] }) {
   const [message, setMessage] = useState(""); const [busy, setBusy] = useState(false); const router = useRouter();
-  const form = useForm<CreateTechnicianInput, unknown, CreateTechnicianValues>({ resolver: zodResolver(createTechnicianSchema), defaultValues: { name: "", profile_id: "", role_title: "", about: "", skills: "", rating: null, reviews_count: null, jobs_completed: null, years_experience: null, on_time_percent: null, verified: false } });
+  const [photoPreview, setPhotoPreview] = useState("");
+  useEffect(() => () => { if (photoPreview) URL.revokeObjectURL(photoPreview); }, [photoPreview]);
+  const form = useForm<CreateTechnicianInput, unknown, CreateTechnicianValues>({ resolver: zodResolver(createTechnicianSchema), defaultValues: { name: "", phone: "", profile_id: "", role_title: "", about: "", skills: "", rating: null, reviews_count: null, jobs_completed: null, years_experience: null, on_time_percent: null, verified: false } });
   async function submit(values: CreateTechnicianValues) {
     setBusy(true); setMessage(""); const payload = new FormData(); Object.entries(values).forEach(([key, value]) => payload.set(key, value === null ? "" : String(value)));
-    try { await createTechnician(payload); setMessage("Technician record created."); form.reset(); router.refresh(); }
+    const photo = (document.getElementById("new-technician-photo") as HTMLInputElement | null)?.files?.[0];
+    if (photo) payload.set("technician_photo", photo);
+    try { await createTechnician(payload); setMessage("Technician record created."); form.reset(); const input = document.getElementById("new-technician-photo") as HTMLInputElement | null; if (input) input.value = ""; setPhotoPreview(""); router.refresh(); }
     catch (error) { setMessage(error instanceof Error ? error.message : "Could not create technician."); }
     finally { setBusy(false); }
   }
   return <EditorDialog title="Create technician record" buttonLabel="+ Add technician" className="button"><form className="dialog-body" onSubmit={form.handleSubmit(submit)}><div className="form-grid">
     <div className="form-field"><label>Name</label><input className="field" {...form.register("name")} />{form.formState.errors.name && <small className="error-text">{form.formState.errors.name.message}</small>}</div>
+    <div className="form-field"><label>Phone number</label><input className="field" type="tel" autoComplete="tel" {...form.register("phone")} /></div>
+    <div className="form-field full"><label htmlFor="new-technician-photo">Technician photo</label><input id="new-technician-photo" className="field" type="file" accept="image/png,image/jpeg,image/webp" onChange={(event) => setPhotoPreview(event.target.files?.[0] ? URL.createObjectURL(event.target.files[0]) : "")} />{photoPreview ? <Image unoptimized src={photoPreview} alt="Technician photo preview" width={80} height={80} style={{ objectFit: "cover", borderRadius: "50%", marginTop: 8 }} /> : <span className="muted-cell">No photo uploaded.</span>}</div>
     <div className="form-field"><label>Link existing profile (optional)</label><select className="field" {...form.register("profile_id")}><option value="">No Auth profile (standalone technician)</option>{profiles.map((profile) => <option key={profile.id} value={profile.id}>{profile.full_name || profile.id} · {profile.role}</option>)}</select></div>
     <div className="form-field full"><label>Role title</label><input className="field" {...form.register("role_title")} /></div>
     <div className="form-field"><label>Rating</label><input className="field" type="number" min="0" max="5" step="0.1" {...form.register("rating", { setValueAs: (value) => value === "" ? null : Number(value) })} /></div>
@@ -251,17 +266,19 @@ export function ReviewEditor({ row }: { row: JsonRow }) {
 
 const bookingSchema = z.object({
   scheduled_date: z.string().min(1), scheduled_time: z.string().min(1), technician_id: z.union([z.literal(""), z.string().uuid()]),
-  address_line: z.string().min(1), notes: z.string(), service_fee: z.coerce.number().int().nullable(),
+  notes: z.string(), service_fee: z.coerce.number().int().nullable(),
   parts_estimate: z.coerce.number().int().nullable(), discount: z.coerce.number().int().nullable(), total: z.coerce.number().int().nullable(),
+  payment_status: z.enum(["pending", "paid", "refunded"]),
 });
 type BookingValues = z.infer<typeof bookingSchema>;
 export function BookingEditor({ row, technicians }: { row: JsonRow; technicians: { id: string; name: string }[] }) {
   const [message, setMessage] = useState(""); const [busy, setBusy] = useState(false); const router = useRouter();
   const form = useForm<z.input<typeof bookingSchema>, unknown, BookingValues>({ resolver: zodResolver(bookingSchema), defaultValues: {
     scheduled_date: String(row.scheduled_date ?? ""), scheduled_time: String(row.scheduled_time ?? ""), technician_id: String(row.technician_id ?? ""),
-    address_line: String(row.address_line ?? ""), notes: String(row.notes ?? ""),
+    notes: String(row.notes ?? ""),
     service_fee: row.service_fee == null ? null : Number(row.service_fee), parts_estimate: row.parts_estimate == null ? null : Number(row.parts_estimate),
     discount: row.discount == null ? null : Number(row.discount), total: row.total == null ? null : Number(row.total),
+    payment_status: ["pending", "paid", "refunded"].includes(String(row.payment_status)) ? String(row.payment_status) as "pending" | "paid" | "refunded" : "pending",
   } });
   async function submit(values: BookingValues) {
     setBusy(true); setMessage(""); const payload = new FormData(); payload.set("id", String(row.id));
@@ -274,18 +291,35 @@ export function BookingEditor({ row, technicians }: { row: JsonRow; technicians:
     <div className="form-field"><label>Scheduled date</label><input className="field" type="date" {...form.register("scheduled_date")} /></div>
     <div className="form-field"><label>Scheduled time</label><input className="field" {...form.register("scheduled_time")} /></div>
     <div className="form-field full"><label>Technician</label><select className="field" {...form.register("technician_id")}><option value="">Unassigned</option>{technicians.map((technician) => <option key={technician.id} value={technician.id}>{technician.name}</option>)}</select></div>
-    <div className="form-field full"><label>Address</label><textarea className="field" {...form.register("address_line")} /></div>
+    <div className="form-field full"><label>Selected address</label><p className="muted-cell">{String((row.bookingAddress as JsonRow | null)?.line ?? row.address_line ?? "Address unavailable")}{(row.bookingAddress as JsonRow | null)?.city ? `, ${String((row.bookingAddress as JsonRow).city)}` : ""}{(row.bookingAddress as JsonRow | null)?.pincode ? ` ${String((row.bookingAddress as JsonRow).pincode)}` : ""}. Edit saved addresses in the Addresses section.</p></div>
     <div className="form-field full"><label>Notes</label><textarea className="field" {...form.register("notes")} /></div>
+    <div className="form-field"><label>Payment status</label><select className="field" {...form.register("payment_status")}><option value="pending">Pending</option><option value="paid">Paid</option><option value="refunded">Refunded</option></select></div>
     {(["service_fee", "parts_estimate", "discount", "total"] as const).map((field) => <div className="form-field" key={field}><label>{field.replaceAll("_", " ")}</label><input className="field" type="number" step="1" {...form.register(field, { setValueAs: (value) => value === "" ? null : Number(value) })} /></div>)}
-  </div><p className="muted-cell">Booking status and payment fields are left unchanged; their allowed values are defined by the existing app/database.</p>{message && <p className={message === "Booking saved." ? "success-text" : "error-text"} role="status">{message}</p>}<div className="dialog-foot" style={{ padding: "18px 0 0", border: 0 }}><button className="button secondary" type="button" onClick={(event) => event.currentTarget.closest("dialog")?.close()}>Cancel</button><button className="button" disabled={busy}>{busy ? "Saving…" : "Save booking"}</button></div></form></EditorDialog>;
+  </div><p className="muted-cell">Payment status is updated manually after payment verification. Booking progress remains controlled by its workflow.</p>{message && <p className={message === "Booking saved." ? "success-text" : "error-text"} role="status">{message}</p>}<div className="dialog-foot" style={{ padding: "18px 0 0", border: 0 }}><button className="button secondary" type="button" onClick={(event) => event.currentTarget.closest("dialog")?.close()}>Cancel</button><button className="button" disabled={busy}>{busy ? "Saving…" : "Save booking"}</button></div></form></EditorDialog>;
 }
 
-const addressSchema = z.object({ user_id: z.string().uuid("Choose a profile"), label: z.string().min(1).max(100), line: z.string().min(1).max(2000), city: z.string().max(120), is_default: z.boolean() });
+export function PaymentEditor({ row }: { row: JsonRow }) {
+  const [message, setMessage] = useState(""); const [busy, setBusy] = useState(false); const router = useRouter();
+  const form = useForm<{ payment_status: "pending" | "paid" | "refunded" }>({ defaultValues: { payment_status: ["pending", "paid", "refunded"].includes(String(row.payment_status)) ? row.payment_status as "pending" | "paid" | "refunded" : "pending" } });
+  async function submit(values: { payment_status: "pending" | "paid" | "refunded" }) {
+    setBusy(true); setMessage(""); const payload = new FormData(); payload.set("id", String(row.id)); payload.set("payment_status", values.payment_status);
+    try { await saveBookingPayment(payload); setMessage("Payment status saved."); router.refresh(); }
+    catch (error) { setMessage(error instanceof Error ? error.message : "Could not update payment status."); }
+    finally { setBusy(false); }
+  }
+  return <EditorDialog title="Update payment status" buttonLabel="Update payment" ><form className="dialog-body" onSubmit={form.handleSubmit(submit)}>
+    <div className="form-field"><label>Payment status</label><select className="field" {...form.register("payment_status")}><option value="pending">Pending</option><option value="paid">Paid</option><option value="refunded">Refunded</option></select></div>
+    {message && <p className={message === "Payment status saved." ? "success-text" : "error-text"} role="status">{message}</p>}
+    <div className="dialog-foot" style={{ padding: "18px 0 0", border: 0 }}><button className="button" disabled={busy}>{busy ? "Saving…" : "Save payment status"}</button></div>
+  </form></EditorDialog>;
+}
+
+const addressSchema = z.object({ user_id: z.string().uuid("Choose a profile"), label: z.string().min(1).max(100), line: z.string().min(1).max(2000), city: z.string().max(120), pincode: z.string().max(20), is_default: z.boolean() });
 type AddressValues = z.infer<typeof addressSchema>;
 export function AddressEditor({ row, profiles }: { row?: JsonRow; profiles: { id: string; full_name: string | null }[] }) {
   const [message, setMessage] = useState(""); const [busy, setBusy] = useState(false); const router = useRouter();
   const form = useForm<AddressValues>({ resolver: zodResolver(addressSchema), defaultValues: {
-    user_id: String(row?.user_id ?? ""), label: String(row?.label ?? ""), line: String(row?.line ?? ""), city: String(row?.city ?? ""), is_default: Boolean(row?.is_default),
+    user_id: String(row?.user_id ?? ""), label: String(row?.label ?? ""), line: String(row?.line ?? ""), city: String(row?.city ?? ""), pincode: String(row?.pincode ?? ""), is_default: Boolean(row?.is_default),
   } });
   async function submit(values: AddressValues) {
     setBusy(true); setMessage(""); const payload = new FormData(); Object.entries(values).forEach(([key, value]) => payload.set(key, String(value)));
@@ -299,7 +333,7 @@ export function AddressEditor({ row, profiles }: { row?: JsonRow; profiles: { id
   return <EditorDialog title={row ? "Edit address" : "Add address"} buttonLabel={row ? "Edit" : "+ Add address"} className={row ? "button secondary small" : "button"}>
     <form className="dialog-body" onSubmit={form.handleSubmit(submit)}><div className="form-grid">
       <div className="form-field full"><label>Owner profile</label><select className="field" {...form.register("user_id")}><option value="">Select a profile</option>{profiles.map((profile) => <option key={profile.id} value={profile.id}>{profile.full_name || profile.id}</option>)}</select></div>
-      <div className="form-field"><label>Label</label><input className="field" {...form.register("label")} /></div><div className="form-field"><label>City</label><input className="field" {...form.register("city")} /></div>
+      <div className="form-field"><label>Label</label><input className="field" {...form.register("label")} /></div><div className="form-field"><label>City</label><input className="field" {...form.register("city")} /></div><div className="form-field"><label>Pincode</label><input className="field" inputMode="numeric" {...form.register("pincode")} /></div>
       <div className="form-field full"><label>Address line</label><textarea className="field" {...form.register("line")} /></div>
       <label className="check-row"><input type="checkbox" {...form.register("is_default")} /> Default address</label>
     </div>{message && <p className={message.includes("created") || message.includes("saved") ? "success-text" : "error-text"} role="status">{message}</p>}

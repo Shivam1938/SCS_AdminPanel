@@ -1,8 +1,29 @@
 import "server-only";
 import { requireAdmin } from "@/lib/auth";
+import { createAdminClient } from "@/lib/supabase/admin";
 
 export type SectionKey = "users" | "technicians" | "services" | "bookings" | "reviews" | "notifications" | "payments" | "addresses";
 export type JsonRow = Record<string, unknown>;
+
+function bookingPhotoPaths(value: unknown): string[] {
+  if (Array.isArray(value)) return value.filter((path): path is string => typeof path === "string" && path.trim().length > 0);
+  if (typeof value !== "string" || !value.trim()) return [];
+  try {
+    const parsed: unknown = JSON.parse(value);
+    if (Array.isArray(parsed)) return parsed.filter((path): path is string => typeof path === "string" && path.trim().length > 0);
+  } catch { /* A single stored object path is also accepted. */ }
+  return [value.trim()];
+}
+
+function bookingPhotoCount(value: unknown): number {
+  if (Array.isArray(value)) return value.length;
+  if (typeof value !== "string" || !value.trim()) return 0;
+  try {
+    const parsed: unknown = JSON.parse(value);
+    if (Array.isArray(parsed)) return parsed.length;
+  } catch { /* A single stored object path counts as one photo reference. */ }
+  return 1;
+}
 
 export async function getNotificationProfiles() {
   const { supabase } = await requireAdmin();
@@ -50,11 +71,15 @@ export async function getRows(section: SectionKey) {
     const ids = rows.map((row) => String(row.id));
     if (!ids.length) return rows;
     const [addresses, bookings] = await Promise.all([
-      supabase.from("addresses").select("id, user_id, label, line, city, is_default").in("user_id", ids),
+      supabase.from("addresses").select("id, user_id, label, line, city, pincode, is_default").in("user_id", ids),
       supabase.from("bookings").select("id, code, user_id, status, scheduled_date, total, created_at").in("user_id", ids).order("created_at", { ascending: false }).limit(500),
     ]);
     if (addresses.error || bookings.error) throw new Error(`Could not load profile details: ${addresses.error?.message ?? bookings.error?.message}`);
-    return rows.map((row) => ({ ...row, canChangeRole: row.id !== user.id, canDelete: row.id !== user.id, addresses: addresses.data?.filter((item) => item.user_id === row.id) ?? [], bookings: bookings.data?.filter((item) => item.user_id === row.id) ?? [] }));
+    return rows.map((row) => {
+      const userAddresses = addresses.data?.filter((item) => item.user_id === row.id) ?? [];
+      const primaryAddress = userAddresses.find((address) => address.is_default) ?? userAddresses.find((address) => address.city) ?? userAddresses[0] ?? null;
+      return { ...row, addressCity: primaryAddress?.city ?? null, primaryAddress, canChangeRole: row.id !== user.id, canDelete: row.id !== user.id, addresses: userAddresses, bookings: bookings.data?.filter((item) => item.user_id === row.id) ?? [] };
+    });
   }
   if (section === "addresses") {
     const userIds = [...new Set(rows.map((row) => String(row.user_id)))];
@@ -75,36 +100,70 @@ export async function getRows(section: SectionKey) {
     const userIds = [...new Set(rows.map((row) => String(row.user_id)))];
     const bookingIds = [...new Set(rows.map((row) => String(row.booking_id)))];
     const technicianIds = [...new Set(rows.map((row) => row.technician_id ? String(row.technician_id) : "").filter(Boolean))];
-    const [profiles, bookings, technicians] = await Promise.all([
+    const [profiles, bookings] = await Promise.all([
       userIds.length ? supabase.from("profiles").select("id, full_name, phone, city").in("id", userIds) : Promise.resolve({ data: [], error: null }),
-      bookingIds.length ? supabase.from("bookings").select("id, code, service_id, scheduled_date, status").in("id", bookingIds) : Promise.resolve({ data: [], error: null }),
-      technicianIds.length ? supabase.from("technicians").select("id, name").in("id", technicianIds) : Promise.resolve({ data: [], error: null }),
+      bookingIds.length ? supabase.from("bookings").select("id, code, service_id, technician_id, scheduled_date, status").in("id", bookingIds) : Promise.resolve({ data: [], error: null }),
     ]);
-    const failure = profiles.error ?? bookings.error ?? technicians.error;
+    const failure = profiles.error ?? bookings.error;
     if (failure) throw new Error(`Could not load review details: ${failure.message}`);
+    const bookingTechnicianIds = (bookings.data ?? []).map((item) => item.technician_id ? String(item.technician_id) : "").filter(Boolean);
+    const allTechnicianIds = [...new Set([...technicianIds, ...bookingTechnicianIds])];
+    const technicians = allTechnicianIds.length
+      ? await supabase.from("technicians").select("id, name").in("id", allTechnicianIds)
+      : { data: [], error: null };
+    if (technicians.error) throw new Error(`Could not load review technicians: ${technicians.error.message}`);
     const serviceIds = [...new Set((bookings.data ?? []).map((item) => item.service_id).filter(Boolean))];
     const services = serviceIds.length ? await supabase.from("services").select("id, name").in("id", serviceIds) : { data: [], error: null };
     if (services.error) throw new Error(`Could not load review services: ${services.error.message}`);
-    return rows.map((row) => ({ ...row,
-      customer: profiles.data?.find((item) => item.id === row.user_id) ?? null,
-      booking: bookings.data?.find((item) => item.id === row.booking_id) ?? null,
-      service: services.data?.find((item) => item.id === bookings.data?.find((booking) => booking.id === row.booking_id)?.service_id) ?? null,
-      technician: technicians.data?.find((item) => item.id === row.technician_id) ?? null,
-    }));
+    return rows.map((row) => {
+      const booking = bookings.data?.find((item) => item.id === row.booking_id) ?? null;
+      const reviewTechnicianId = row.technician_id ? String(row.technician_id) : "";
+      const assignedTechnicianId = booking?.technician_id ? String(booking.technician_id) : "";
+      // The booking assignment is canonical if a legacy review reference disagrees.
+      // A null review technician or unassigned booking shows the UI fallback.
+      const displayTechnicianId = reviewTechnicianId
+        ? (booking ? assignedTechnicianId : reviewTechnicianId)
+        : "";
+      return { ...row,
+        customer: profiles.data?.find((item) => item.id === row.user_id) ?? null,
+        booking,
+        service: services.data?.find((item) => item.id === booking?.service_id) ?? null,
+        technician: technicians.data?.find((item) => String(item.id) === displayTechnicianId) ?? null,
+      };
+    });
   }
   if (section === "bookings" || section === "payments") {
     const ids = [...new Set(rows.map((row) => String(row.user_id)))];
-    if (!ids.length) return rows;
-    const serviceIds = section === "bookings" ? [...new Set(rows.map((row) => String(row.service_id)).filter(Boolean))] : [];
-    const technicianIds = section === "bookings" ? [...new Set(rows.map((row) => String(row.technician_id ?? "")).filter(Boolean))] : [];
-    const [profiles, services, technicians] = await Promise.all([
-      supabase.from("profiles").select("id, full_name, phone, city").in("id", ids),
+    const serviceIds = [...new Set(rows.map((row) => String(row.service_id)).filter(Boolean))];
+    const technicianIds = [...new Set(rows.map((row) => String(row.technician_id ?? "")).filter(Boolean))];
+    const addressIds = section === "bookings" ? [...new Set(rows.map((row) => String(row.address_id ?? "")).filter(Boolean))] : [];
+    const [profiles, services, technicians, addresses] = await Promise.all([
+      ids.length ? supabase.from("profiles").select("id, full_name, phone, city").in("id", ids) : Promise.resolve({ data: [], error: null }),
       serviceIds.length ? supabase.from("services").select("id, name, icon").in("id", serviceIds) : Promise.resolve({ data: [], error: null }),
       technicianIds.length ? supabase.from("technicians").select("id, name, role_title").in("id", technicianIds) : Promise.resolve({ data: [], error: null }),
+      addressIds.length ? supabase.from("addresses").select("id, line, city, pincode").in("id", addressIds) : Promise.resolve({ data: [], error: null }),
     ]);
-    const failure = profiles.error ?? services.error ?? technicians.error;
+    const failure = profiles.error ?? services.error ?? technicians.error ?? addresses.error;
     if (failure) throw new Error(`Could not load booking details: ${failure.message}`);
-    return rows.map((row) => ({ ...row, customer: profiles.data?.find((item) => item.id === row.user_id) ?? null,
+    const bookings = section === "bookings" ? rows : [];
+    const photoPaths = [...new Set(bookings.flatMap((row) => bookingPhotoPaths(row.photos)))];
+    let signedPhotos = new Map<string, string>();
+    if (photoPaths.length) {
+      try {
+        const { data, error } = await createAdminClient().storage.from("booking-photos").createSignedUrls(photoPaths, 3600);
+        if (!error) signedPhotos = new Map((data ?? []).flatMap((photo) => photo.path && photo.signedUrl ? [[photo.path, photo.signedUrl] as const] : []));
+      } catch { /* The booking details view displays a friendly photo-unavailable message. */ }
+    }
+    return rows.map((row) => ({ ...row,
+      bookingAddress: section === "bookings" ? addresses.data?.find((address) => address.id === row.address_id) ?? null : null,
+      bookingPhotoUrls: section === "bookings" && Array.isArray(row.photos)
+        ? row.photos.flatMap((path) => {
+          const url = typeof path === "string" ? signedPhotos.get(path) : undefined;
+          return url ? [url] : [];
+        })
+        : [],
+      bookingPhotoCount: section === "bookings" ? bookingPhotoCount(row.photos) : 0,
+      customer: profiles.data?.find((item) => item.id === row.user_id) ?? null,
       services: services.data?.find((item) => item.id === row.service_id) ?? null,
       technicians: technicians.data?.find((item) => item.id === row.technician_id) ?? null,
     }));

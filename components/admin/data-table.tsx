@@ -1,25 +1,31 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useMemo, useRef, useState } from "react";
+import Image from "next/image";
 import { useRouter } from "next/navigation";
 import type { JsonRow, SectionKey } from "@/lib/data";
-import { cancelBooking, deleteAddress, deleteBooking, deleteNotification, deleteProfileUser, deleteReview, deleteService, deleteTechnician, markNotificationRead } from "@/lib/mutations";
-import { AddressEditor, BookingEditor, CreateProfileUserEditor, NotificationEditEditor, NotificationEditor, ProfileEditor, ProfileRoleEditor, ReviewEditor, ServiceEditor, TechnicianCreateEditor, TechnicianEditor } from "@/components/admin/editors";
+import { advanceBookingStatus, cancelBooking, deleteAddress, deleteBooking, deleteNotification, deleteProfileUser, deleteReview, deleteService, deleteTechnician, markNotificationRead } from "@/lib/mutations";
+import { AddressEditor, BookingEditor, CreateProfileUserEditor, NotificationEditEditor, NotificationEditor, PaymentEditor, ProfileEditor, ProfileRoleEditor, ReviewEditor, ServiceEditor, TechnicianCreateEditor, TechnicianEditor } from "@/components/admin/editors";
 
 const configs: Record<SectionKey, { columns: [string, string][]; filter?: string; search: string[] }> = {
-  users: { columns: [["full_name", "Profile"], ["phone", "Phone"], ["city", "City"], ["role", "Role"], ["created_at", "Joined"]], filter: "role", search: ["full_name", "phone", "city", "role", "id"] },
+  users: { columns: [["full_name", "Profile"], ["phone", "Phone"], ["city", "City"], ["role", "Role"], ["created_at", "Joined"]], filter: "role", search: ["full_name", "phone", "city", "addressCity", "role", "id"] },
   technicians: { columns: [["name", "Technician"], ["role_title", "Specialty"], ["verified", "Verified"], ["rating", "Rating"], ["jobs_completed", "Jobs"], ["years_experience", "Experience"]], filter: "verified", search: ["name", "role_title", "skills"] },
   services: { columns: [["name", "Service"], ["id", "ID"], ["price", "Price"], ["active", "Active"], ["rating", "Rating"], ["bookings_count", "Bookings"], ["sort", "Sort"]], filter: "active", search: ["name", "id", "description"] },
   bookings: { columns: [["code", "Booking"], ["customer", "Customer"], ["services", "Service"], ["technicians", "Technician"], ["scheduled_date", "Scheduled"], ["status", "Status"], ["payment_status", "Payment"], ["total", "Total"]], filter: "status", search: ["code", "customer", "services", "technicians", "status", "payment_status", "address_line"] },
   payments: { columns: [["code", "Booking"], ["customer", "Customer"], ["payment_method", "Method"], ["payment_status", "Status"], ["service_fee", "Service fee"], ["parts_estimate", "Parts estimate"], ["discount", "Discount"], ["total", "Total"]], filter: "payment_status", search: ["code", "customer", "payment_method", "payment_status"] },
   reviews: { columns: [["customer", "Customer"], ["technician", "Technician"], ["booking", "Booking"], ["service", "Service"], ["rating", "Rating"], ["comment", "Comment"], ["tags", "Tags"], ["created_at", "Created"]], search: ["customer", "technician", "booking", "service", "rating", "comment", "tags"] },
   notifications: { columns: [["title", "Title"], ["recipient", "Recipient"], ["body", "Message"], ["unread", "Unread"], ["created_at", "Created"]], filter: "unread", search: ["title", "recipient", "body"] },
-  addresses: { columns: [["owner", "User"], ["label", "Label"], ["line", "Address"], ["city", "City"], ["is_default", "Default"]], filter: "is_default", search: ["owner", "label", "line", "city", "user_id"] },
+  addresses: { columns: [["owner", "User"], ["label", "Label"], ["line", "Address"], ["city", "City"], ["pincode", "Pincode"], ["is_default", "Default"]], filter: "is_default", search: ["owner", "label", "line", "city", "pincode", "user_id"] },
 };
 const titleCase = (value: string) => value.replaceAll("_", " ").replace(/\b\w/g, (letter) => letter.toUpperCase());
 const nested = (row: JsonRow, key: string): unknown => {
   const raw = row[key];
+  if (key === "city" && "addressCity" in row) return row.addressCity ?? raw;
   if (key === "customer" || key === "recipient" || key === "owner") return (raw as JsonRow | null)?.full_name;
+  if (key === "technician") {
+    const name = (raw as JsonRow | null)?.name;
+    return name ?? (row.technician_id ? "Technician record unavailable" : "Technician not assigned");
+  }
   if (key === "services") return (raw as JsonRow | null)?.name ?? (Array.isArray(raw) ? (raw[0] as JsonRow | undefined)?.name : undefined);
   if (key === "technicians") return (raw as JsonRow | null)?.name ?? (Array.isArray(raw) ? (raw[0] as JsonRow | undefined)?.name : undefined);
   if (key === "booking") return (raw as JsonRow | null)?.code;
@@ -35,8 +41,83 @@ function show(value: unknown, key: string) {
   if (typeof value === "object") return "—";
   return String(value);
 }
-function details(row: JsonRow) {
-  return Object.entries(row).filter(([key]) => !["services", "technicians", "customer", "recipient", "owner", "booking", "canChangeRole", "canDelete", "addresses", "bookings"].includes(key)).map(([key, value]) => [titleCase(key), show(value, key)] as const);
+function DetailsDialog({ children }: { children: React.ReactNode }) {
+  const dialog = useRef<HTMLDialogElement>(null);
+  return <><button className="button secondary small" type="button" onClick={() => dialog.current?.showModal()}>View details</button>
+    <dialog ref={dialog} className="dialog detail-dialog"><div className="dialog-head"><strong>Record details</strong><button className="button secondary small" type="button" onClick={() => dialog.current?.close()}>Close</button></div>
+      <div className="dialog-body detail-content">{children}</div></dialog></>;
+}
+function details(row: JsonRow, section: SectionKey) {
+  if (section === "users") {
+    const addressCity = typeof row.addressCity === "string" ? row.addressCity.trim() : "";
+    const fields = Object.entries(row)
+      .filter(([key]) => !["city", "addressCity", "primaryAddress", "services", "technicians", "customer", "recipient", "owner", "booking", "canChangeRole", "canDelete", "addresses", "bookings", "avatar_url"].includes(key))
+      .map(([key, value]) => [titleCase(key), show(value, key)] as const);
+    return [
+      ...fields,
+      ["City", addressCity || "—"] as const,
+    ];
+  }
+  if (section === "payments") {
+    const customer = row.customer as JsonRow | null;
+    const service = row.services as JsonRow | null;
+    const technician = row.technicians as JsonRow | null;
+    const scheduledDate = row.scheduled_date
+      ? new Date(`${String(row.scheduled_date)}T00:00:00`).toLocaleDateString("en-IN", { weekday: "short", day: "numeric", month: "short", year: "numeric" })
+      : null;
+    const paidAt = row.payment_paid_at
+      ? new Date(String(row.payment_paid_at)).toLocaleString("en-IN", { dateStyle: "medium", timeStyle: "short" })
+      : row.payment_status === "pending" ? "Not paid yet" : "Unavailable for this payment";
+    return [
+      ["Booking ID", show(row.code, "code")],
+      ["Customer name", show(customer?.full_name, "full_name")],
+      ["Customer phone", show(row.phone ?? customer?.phone, "phone")],
+      ["Service name", show(service?.name, "service")],
+      ["Assigned technician", show(technician?.name ?? "Technician not assigned", "technician")],
+      ["Scheduled date", show(scheduledDate, "scheduled_date")],
+      ["Scheduled time", show(row.scheduled_time, "scheduled_time")],
+      ["Payment method", show(row.payment_method, "payment_method")],
+      ["Payment status", show(row.payment_status, "payment_status")],
+      ["Service fee", show(row.service_fee, "service_fee")],
+      ["Parts estimate", show(row.parts_estimate, "parts_estimate")],
+      ["Discount", show(row.discount, "discount")],
+      ["Total", show(row.total, "total")],
+      ["Payment date", paidAt],
+    ] as const;
+  }
+  if (section === "bookings") {
+    const address = row.bookingAddress as JsonRow | null;
+    const scheduledDate = row.scheduled_date
+      ? new Date(`${String(row.scheduled_date)}T00:00:00`).toLocaleDateString("en-IN", { weekday: "short", day: "numeric", month: "short", year: "numeric" })
+      : null;
+    return [
+      ["Booking code", show(row.code, "code")],
+      ["Booking ID", show(row.id, "id")],
+      ["Booking date", show(row.created_at, "created_at")],
+      ["Customer name", show((row.customer as JsonRow | null)?.full_name, "full_name")],
+      ["Current profile phone", show((row.customer as JsonRow | null)?.phone, "phone")],
+      ["Booking-time phone", show(row.phone, "phone")],
+      ["Selected service", show((row.services as JsonRow | null)?.name, "service")],
+      ["Scheduled date", show(scheduledDate, "scheduled_date")],
+      ["Scheduled time", show(row.scheduled_time, "scheduled_time")],
+      ["Full address", show(address?.line || row.address_line, "address_line")],
+      ["City", show(address?.city, "city")],
+      ["Pincode", show(address?.pincode, "pincode")],
+      ["Notes", show(row.notes, "notes")],
+      ["Payment method", show(row.payment_method, "payment_method")],
+      ["Payment status", show(row.payment_status, "payment_status")],
+      ["Payment date", row.payment_paid_at
+        ? new Date(String(row.payment_paid_at)).toLocaleString("en-IN", { dateStyle: "medium", timeStyle: "short" })
+        : row.payment_status === "pending" ? "Not paid yet" : "Unavailable for this payment"],
+      ["Service fee", show(row.service_fee, "service_fee")],
+      ["Parts estimate", show(row.parts_estimate, "parts_estimate")],
+      ["Discount", show(row.discount, "discount")],
+      ["Total", show(row.total, "total")],
+      ["Current booking status", show(row.status, "status")],
+      ["Assigned technician", show((row.technicians as JsonRow | null)?.name, "technician")],
+    ] as const;
+  }
+  return Object.entries(row).filter(([key]) => !["services", "technicians", "technician", "technicianAssignmentMatches", "customer", "recipient", "owner", "booking", "canChangeRole", "canDelete", "addresses", "bookings", "avatar_url"].includes(key)).map(([key, value]) => [titleCase(key), show(value, key)] as const);
 }
 
 export function DataTable({ section, rows, profiles = [], technicianProfiles = [], technicians = [] }: {
@@ -94,15 +175,17 @@ function TableRows({ section, row, config, safeAction, pendingId, profiles, tech
   pendingId: string; profiles: { id: string; full_name: string | null }[];
   technicianProfiles: { id: string; full_name: string | null; role: "customer" | "technician" }[]; technicians: { id: string; name: string }[];
 }) {
-  const fields = details(row);
+  const fields = details(row, section);
   const related = ["users", "technicians", "bookings"].includes(section) ? row.bookings as JsonRow[] | undefined : undefined;
   const addresses = section === "users" ? row.addresses as JsonRow[] | undefined : undefined;
   return <>
     <tr>{config.columns.map(([key]) => { const value = nested(row, key); return <td key={key} className={key === "full_name" || key === "name" || key === "code" ? "strong-cell" : ""}>
       {key === "status" || key === "payment_status" || key === "role" ? <span className={`badge ${String(value).toLowerCase() === "cancelled" ? "red" : String(value).toLowerCase() === "completed" ? "" : "warn"}`}>{show(value, key)}</span> : show(value, key)}
-    </td>; })}<td><details><summary className="icon-button">View</summary><div className="card" style={{ minWidth: 270, maxWidth: 520, padding: 12, whiteSpace: "normal", display: "grid", gap: 7, marginTop: 6 }}>
+    </td>; })}<td><DetailsDialog><div style={{ display: "grid", gap: 12 }}>
+      {section === "users" && <div><strong>Profile photo</strong><div style={{ marginTop: 8, width: 88, height: 88, borderRadius: "50%", overflow: "hidden", display: "grid", placeItems: "center", background: "#e4f3f2", color: "var(--deep)", fontWeight: 800 }}>{typeof row.avatar_url === "string" && row.avatar_url ? <Image src={row.avatar_url} alt={`${String(row.full_name || "User")} profile photo`} width={88} height={88} unoptimized style={{ width: 88, height: 88, objectFit: "cover" }} /> : String(row.full_name || "U").split(/\s+/).map((part) => part[0]).join("").slice(0, 2).toUpperCase()}</div></div>}
       {fields.map(([label, value]) => <div key={label} className="muted-cell"><strong style={{ color: "var(--ink)" }}>{label}:</strong> {value}</div>)}
-      {addresses?.length ? <div><strong>Addresses</strong>{addresses.map((address) => <p className="muted-cell" key={String(address.id)}>{String(address.label)}: {String(address.line)}{address.city ? `, ${String(address.city)}` : ""}</p>)}</div> : null}
+      {section === "bookings" && <div><strong>Uploaded booking photos</strong>{(row.bookingPhotoUrls as string[] | undefined)?.length ? <div className="inline-actions" style={{ marginTop: 8 }}>{(row.bookingPhotoUrls as string[]).map((src, index) => <a key={`${src}-${index}`} href={src} target="_blank" rel="noreferrer" aria-label={`Open booking photo ${index + 1}`}><Image src={src} alt={`Booking photo ${index + 1}`} width={96} height={96} unoptimized style={{ width: 96, height: 96, objectFit: "cover", borderRadius: 8 }} /></a>)}</div> : <p className="muted-cell">{Number(row.bookingPhotoCount ?? 0) === 0 ? "No photos were uploaded for this booking." : "Photos could not be loaded. Refresh and try again."}</p>}{Number(row.bookingPhotoCount ?? 0) > Number((row.bookingPhotoUrls as string[] | undefined)?.length ?? 0) && Number((row.bookingPhotoUrls as string[] | undefined)?.length ?? 0) > 0 ? <p className="muted-cell">Some photos are unavailable. Refresh and try again.</p> : null}</div>}
+      {section === "users" ? addresses?.length ? <div><strong>Saved addresses</strong>{addresses.map((address) => <p className="muted-cell" key={String(address.id)}>{String(address.label)}{address.is_default ? " · Default" : ""}: {String(address.line)}{address.city ? `, ${String(address.city)}` : ""}{address.pincode ? ` ${String(address.pincode)}` : ""}</p>)}</div> : <p className="muted-cell">No saved addresses.</p> : null}
       {related?.length ? <div><strong>{section === "technicians" ? "Booking history" : "Booking history"}</strong>{related.map((booking) => <p className="muted-cell" key={String(booking.id)}>{String(booking.code ?? booking.id)} · {String(booking.status)} · {String(booking.scheduled_date)}</p>)}</div> : null}
       {section === "users" && <ProfileEditor row={row} />}
       {section === "users" && row.canChangeRole === false && <p className="muted-cell">Your own role cannot be changed in the Admin Panel.</p>}
@@ -110,16 +193,18 @@ function TableRows({ section, row, config, safeAction, pendingId, profiles, tech
       {section === "technicians" && <TechnicianEditor row={row} profiles={technicianProfiles} />}
       {section === "services" && <ServiceEditor row={row} />}
       {section === "bookings" && <BookingEditor row={row} technicians={technicians} />}
+      {section === "payments" && <PaymentEditor row={row} />}
       {section === "reviews" && <ReviewEditor row={row} />}
       {section === "notifications" && <NotificationEditEditor row={row} />}
       {section === "addresses" && <AddressEditor row={row} profiles={profiles} />}
-    </div></details></td>
+    </div></DetailsDialog></td>
     {section !== "payments" && <td><div className="inline-actions">
       {section === "users" && row.canDelete === true && <button className="button danger small" disabled={pendingId === String(row.id)} onClick={() => void safeAction(deleteProfileUser, String(row.id), "Permanently delete this Auth user? The operation may be rejected if existing database references prevent deletion.")}>{pendingId === String(row.id) ? "Deleting…" : "Delete"}</button>}
       {section === "users" && row.canDelete === false && <span className="muted-cell">Current account</span>}
       {section === "technicians" && <button className="button danger small" disabled={pendingId === String(row.id)} onClick={() => void safeAction(deleteTechnician, String(row.id), "Delete this technician record? Existing bookings or policies may prevent deletion.")}>{pendingId === String(row.id) ? "Deleting…" : "Delete"}</button>}
       {section === "services" && <button className="button danger small" disabled={pendingId === String(row.id)} onClick={() => void safeAction(deleteService, String(row.id), "Delete this service? Existing bookings or policies may prevent deletion.")}>{pendingId === String(row.id) ? "Deleting…" : "Delete"}</button>}
       {section === "bookings" && ["finding_technician", "technician_assigned"].includes(String(row.status)) && <button className="button danger small" disabled={pendingId === String(row.id)} onClick={() => void safeAction(cancelBooking, String(row.id), "Cancel this booking? This changes its existing status to cancelled.")}>{pendingId === String(row.id) ? "Updating…" : "Cancel"}</button>}
+      {section === "bookings" && ["technician_assigned", "on_the_way", "in_progress"].includes(String(row.status)) && <button className="button secondary small" disabled={pendingId === String(row.id)} onClick={() => void safeAction((formData) => { formData.set("expected_status", String(row.status)); return advanceBookingStatus(formData); }, String(row.id), `Advance this booking from ${String(row.status).replaceAll("_", " ")} to the next stage?`)}>{pendingId === String(row.id) ? "Updating…" : row.status === "technician_assigned" ? "Mark on the way" : row.status === "on_the_way" ? "Start service" : "Complete service"}</button>}
       {section === "bookings" && <button className="button danger small" disabled={pendingId === String(row.id)} onClick={() => void safeAction(deleteBooking, String(row.id), "Permanently delete this booking? Existing reviews or policies may prevent deletion.")}>{pendingId === String(row.id) ? "Deleting…" : "Delete"}</button>}
       {section === "reviews" && <button className="button danger small" disabled={pendingId === String(row.id)} onClick={() => void safeAction(deleteReview, String(row.id), "Delete this review?")}>{pendingId === String(row.id) ? "Deleting…" : "Delete"}</button>}
       {section === "notifications" && row.unread === true && <button className="button secondary small" disabled={pendingId === String(row.id)} onClick={() => void safeAction(markNotificationRead, String(row.id), "Mark this notification as read?")}>{pendingId === String(row.id) ? "Updating…" : "Mark read"}</button>}
