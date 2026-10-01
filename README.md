@@ -49,7 +49,8 @@ Admin access is determined by the authenticated user's UUID matching `profiles.i
 - **Reviews:** view, edit rating/comment/tags, and delete review records.
 - **Notifications:** create in-app notification records, view/edit them, mark them read, or delete them. This does not send push notifications; the schema/project has no push delivery API.
 - **Addresses:** add, view, edit, and delete saved addresses linked to UUID profiles.
-- **Settings:** manage online UPI payment settings, the Home banner image, and the signed-in admin profile. Home banner images use the existing public `service-assets` bucket and are stored in `app_settings.home_banner_url`.
+- **Settings:** manage the Home banner image and the signed-in admin profile. Online UPI configuration has been removed from Settings because the current app flow does not use it.
+- **Business details:** manage contact details plus About Us, Help & Support, Contact Us, Service Policy, Cancellation Policy, Terms & Conditions, and Privacy Policy. These records are read directly by the Expo app from `contact_settings` and `app_content`.
 
 Tables and UUID links follow the supplied schema. In particular, the legacy `users.id` is an integer and is not treated as related to UUID profile IDs. Services use text IDs; technician, booking, review, notification, address, and profile identifiers use the supplied UUID fields.
 

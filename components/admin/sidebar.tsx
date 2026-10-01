@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { Activity, Bell, BriefcaseBusiness, ClipboardList, CreditCard, LayoutDashboard, MapPin, Settings, Star, Users, Wrench } from "lucide-react";
+import { Activity, Bell, BriefcaseBusiness, Building2, ClipboardList, CreditCard, LayoutDashboard, MapPin, Settings, Star, Users, Wrench } from "lucide-react";
 
 const items = [
   { href: "/admin", label: "Dashboard", Icon: LayoutDashboard },
@@ -14,6 +14,7 @@ const items = [
   { href: "/admin/payments", label: "Payments", Icon: CreditCard },
   { href: "/admin/reviews", label: "Reviews", Icon: Star },
   { href: "/admin/notifications", label: "Notifications", Icon: Bell },
+  { href: "/admin/business-details", label: "Business details", Icon: Building2 },
   { href: "/admin/settings", label: "Settings", Icon: Settings },
 ];
 

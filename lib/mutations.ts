@@ -208,29 +208,69 @@ export async function savePaymentSettings(
 
 export async function deleteProfileUser(formData: FormData) {
   const id = uuidSchema.parse(text(formData, "id"));
-  const { supabase, user } = await requireAdmin();
+  const { user } = await requireAdmin();
   if (id === user.id)
     throw new Error("You cannot delete the account you are currently using.");
-  const { data: profile, error: profileError } = await supabase
+
+  const admin = createAdminClient();
+  const { data: profile, error: profileError } = await admin
     .from("profiles")
-    .select("id")
+    .select("id, avatar_url")
     .eq("id", id)
     .maybeSingle();
-  if (profileError)
-    throw new Error(
-      `Could not verify the profile before deletion: ${profileError.message}`,
-    );
-  if (!profile)
-    throw new Error(
-      "The target profile was not found or is not visible under the current RLS policy.",
-    );
-  const admin = createAdminClient();
-  const { error } = await admin.auth.admin.deleteUser(id);
-  if (error)
-    throw new Error(
-      `Could not delete this Auth user. Existing database references or Auth protections may prevent deletion: ${error.message}`,
-    );
+  if (profileError) throw new Error(`Could not load the profile: ${profileError.message}`);
+  if (!profile) throw new Error("The target profile was not found.");
+
+  const { data: bookings, error: bookingsError } = await admin
+    .from("bookings")
+    .select("id, photos")
+    .eq("user_id", id);
+  if (bookingsError) throw new Error(`Could not load the user's bookings: ${bookingsError.message}`);
+
+  const bookingIds = (bookings ?? []).map((booking) => String(booking.id));
+  const photoPaths = (bookings ?? []).flatMap((booking) =>
+    Array.isArray(booking.photos) ? booking.photos.filter((photo): photo is string => typeof photo === "string") : [],
+  );
+  if (photoPaths.length) {
+    await admin.storage.from("booking-photos").remove(photoPaths);
+  }
+
+  if (bookingIds.length) {
+    const { error } = await admin.from("reviews").delete().in("booking_id", bookingIds);
+    if (error) throw new Error(`Could not delete booking reviews: ${error.message}`);
+  }
+  const { error: reviewsError } = await admin.from("reviews").delete().eq("user_id", id);
+  if (reviewsError) throw new Error(`Could not delete user reviews: ${reviewsError.message}`);
+  const { error: notificationsError } = await admin.from("notifications").delete().eq("user_id", id);
+  if (notificationsError) throw new Error(`Could not delete user notifications: ${notificationsError.message}`);
+  const { error: bookmarksError } = await admin.from("service_bookmarks").delete().eq("user_id", id);
+  if (bookmarksError) throw new Error(`Could not delete saved services: ${bookmarksError.message}`);
+  if (bookingIds.length) {
+    const { error } = await admin.from("bookings").delete().in("id", bookingIds);
+    if (error) throw new Error(`Could not delete the user's bookings: ${error.message}`);
+  }
+  const { error: technicianError } = await admin.from("technicians").delete().eq("profile_id", id);
+  if (technicianError) throw new Error(`Could not delete the linked technician record: ${technicianError.message}`);
+  const { error: addressesError } = await admin.from("addresses").delete().eq("user_id", id);
+  if (addressesError) throw new Error(`Could not delete the user's addresses: ${addressesError.message}`);
+
+  if (typeof profile.avatar_url === "string" && profile.avatar_url) {
+    const marker = "/storage/v1/object/public/profile-photos/";
+    const avatarPath = profile.avatar_url.split(marker)[1]?.split("?")[0];
+    if (avatarPath) await admin.storage.from("profile-photos").remove([decodeURIComponent(avatarPath)]);
+  }
+
+  const { error: profileDeleteError } = await admin.from("profiles").delete().eq("id", id);
+  if (profileDeleteError) throw new Error(`Could not delete the profile: ${profileDeleteError.message}`);
+  const { error: authError } = await admin.auth.admin.deleteUser(id);
+  if (authError) throw new Error(`Profile data was deleted, but the Auth user could not be removed: ${authError.message}`);
+
   revalidatePath("/admin/users");
+  revalidatePath("/admin/bookings");
+  revalidatePath("/admin/reviews");
+  revalidatePath("/admin/notifications");
+  revalidatePath("/admin/addresses");
+  revalidatePath("/admin/technicians");
   revalidatePath("/admin");
 }
 
@@ -965,14 +1005,36 @@ export async function advanceBookingStatus(formData: FormData) {
   revalidatePath("/admin");
 }
 
+export async function deleteBookingPhoto(formData: FormData) {
+  const id = uuidSchema.parse(text(formData, "booking_id"));
+  const photo = text(formData, "photo");
+  if (!photo) throw new Error("Booking photo path is required.");
+  const admin = createAdminClient();
+  const { data: booking, error: lookupError } = await admin.from("bookings").select("photos").eq("id", id).maybeSingle();
+  if (lookupError) throw new Error(`Could not load booking photos: ${lookupError.message}`);
+  if (!booking) throw new Error("Booking not found.");
+  const photos = Array.isArray(booking.photos) ? booking.photos.filter((item): item is string => typeof item === "string") : [];
+  if (!photos.includes(photo)) throw new Error("This photo is not attached to the booking.");
+  const { error: storageError } = await admin.storage.from("booking-photos").remove([photo]);
+  if (storageError) throw new Error(`Could not delete the booking photo: ${storageError.message}`);
+  const nextPhotos = photos.filter((item) => item !== photo);
+  const { error } = await admin.from("bookings").update({ photos: nextPhotos }).eq("id", id);
+  if (error) throw new Error(`Could not update booking photos: ${error.message}`);
+  revalidatePath("/admin/bookings");
+}
+
 export async function deleteBooking(formData: FormData) {
   const id = uuidSchema.parse(text(formData, "id"));
-  const { supabase } = await requireAdmin();
-  const { error } = await supabase.from("bookings").delete().eq("id", id);
-  if (error)
-    throw new Error(
-      `Could not delete booking. Existing reviews or database policies may prevent deletion: ${error.message}`,
-    );
+  const admin = createAdminClient();
+  const { data: booking, error: lookupError } = await admin.from("bookings").select("photos").eq("id", id).maybeSingle();
+  if (lookupError) throw new Error(`Could not load booking: ${lookupError.message}`);
+  if (!booking) throw new Error("Booking not found.");
+  const photos = Array.isArray(booking.photos) ? booking.photos.filter((item): item is string => typeof item === "string") : [];
+  if (photos.length) await admin.storage.from("booking-photos").remove(photos);
+  const { error: reviewsError } = await admin.from("reviews").delete().eq("booking_id", id);
+  if (reviewsError) throw new Error(`Could not delete booking reviews: ${reviewsError.message}`);
+  const { error } = await admin.from("bookings").delete().eq("id", id);
+  if (error) throw new Error(`Could not delete booking: ${error.message}`);
   revalidatePath("/admin/bookings");
   revalidatePath("/admin/reviews");
   revalidatePath("/admin/payments");
@@ -1179,4 +1241,30 @@ export async function deleteNotification(formData: FormData) {
   const { error } = await supabase.from("notifications").delete().eq("id", id);
   if (error) throw new Error(`Could not delete notification: ${error.message}`);
   revalidatePath("/admin/notifications");
+}
+
+
+export async function saveContactSettings(formData: FormData) {
+  const input = z.object({
+    phone: z.string().max(100), whatsapp: z.string().max(100), email: z.string().max(320),
+    support_email: z.string().max(320), address: z.string().max(2000), working_hours: z.string().max(500), website: z.string().max(500),
+  }).parse({
+    phone: text(formData, "phone"), whatsapp: text(formData, "whatsapp"), email: text(formData, "email"),
+    support_email: text(formData, "support_email"), address: text(formData, "address"),
+    working_hours: text(formData, "working_hours"), website: text(formData, "website"),
+  });
+  const admin = createAdminClient();
+  const { error } = await admin.from("contact_settings").upsert({ id: 1, ...Object.fromEntries(Object.entries(input).map(([key, value]) => [key, optional(value)])) }, { onConflict: "id" });
+  if (error) throw new Error(`Could not save contact details: ${error.message}`);
+  revalidatePath("/admin/business-details");
+}
+
+export async function saveBusinessContent(formData: FormData) {
+  const input = z.object({ content_key: z.string().min(1).max(100), title: z.string().max(300), content: z.string().max(20000) }).parse({
+    content_key: text(formData, "content_key"), title: text(formData, "title"), content: String(formData.get("content") ?? "").trim(),
+  });
+  const admin = createAdminClient();
+  const { error } = await admin.from("app_content").upsert({ content_key: input.content_key, title: optional(input.title), content: optional(input.content), updated_at: new Date().toISOString() }, { onConflict: "content_key" });
+  if (error) throw new Error(`Could not save business content: ${error.message}`);
+  revalidatePath("/admin/business-details");
 }

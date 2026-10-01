@@ -4,8 +4,8 @@ import { useMemo, useRef, useState } from "react";
 import Image from "next/image";
 import { useRouter } from "next/navigation";
 import type { JsonRow, SectionKey } from "@/lib/data";
-import { advanceBookingStatus, cancelBooking, deleteAddress, deleteBooking, deleteNotification, deleteProfileUser, deleteReview, deleteService, deleteTechnician, markNotificationRead } from "@/lib/mutations";
-import { AddressEditor, BookingEditor, CreateProfileUserEditor, NotificationEditEditor, NotificationEditor, PaymentEditor, ProfileEditor, ProfileRoleEditor, ReviewEditor, ServiceEditor, TechnicianCreateEditor, TechnicianEditor } from "@/components/admin/editors";
+import { advanceBookingStatus, cancelBooking, deleteAddress, deleteBooking, deleteBookingPhoto, deleteNotification, deleteProfileUser, deleteReview, deleteService, deleteTechnician, markNotificationRead } from "@/lib/mutations";
+import { AddressEditor, BookingEditor, CreateProfileUserEditor, NotificationEditEditor, NotificationEditor, PaymentEditor, ProfileRoleEditor, ReviewEditor, ServiceEditor, TechnicianCreateEditor, TechnicianEditor } from "@/components/admin/editors";
 
 const configs: Record<SectionKey, { columns: [string, string][]; filter?: string; search: string[] }> = {
   users: { columns: [["full_name", "Profile"], ["phone", "Phone"], ["city", "City"], ["role", "Role"], ["created_at", "Joined"]], filter: "role", search: ["full_name", "phone", "city", "addressCity", "role", "id"] },
@@ -169,6 +169,47 @@ export function DataTable({ section, rows, profiles = [], technicianProfiles = [
   </>;
 }
 
+function BookingPhotos({ row }: { row: JsonRow }) {
+  const router = useRouter();
+  const [busyPath, setBusyPath] = useState("");
+  const [error, setError] = useState("");
+  const urls = (row.bookingPhotoUrls as string[] | undefined) ?? [];
+  const paths = (row.photos as unknown[] | undefined)?.filter((value): value is string => typeof value === "string") ?? [];
+
+  async function removePhoto(path: string) {
+    if (!window.confirm("Permanently delete this booking photo? This removes it from storage and the booking.")) return;
+    setBusyPath(path); setError("");
+    const formData = new FormData();
+    formData.set("id", String(row.id));
+    formData.set("photo_path", path);
+    try {
+      await deleteBookingPhoto(formData);
+      router.refresh();
+    } catch (error) {
+      setError(error instanceof Error ? error.message : "Could not delete this booking photo.");
+    } finally { setBusyPath(""); }
+  }
+
+  return <div>
+    <strong>Uploaded booking photos</strong>
+    {urls.length ? (
+      <div style={{ display: "grid", gap: 10, marginTop: 8 }}>
+        {urls.map((src, index) => {
+          const path = paths[index];
+          return <div key={`${src}-${index}`} style={{ display: "flex", alignItems: "center", gap: 10 }}>
+            <a href={src} target="_blank" rel="noreferrer" aria-label={`Open booking photo ${index + 1}`}>
+              <Image src={src} alt={`Booking photo ${index + 1}`} width={96} height={96} unoptimized style={{ width: 96, height: 96, objectFit: "cover", borderRadius: 8 }} />
+            </a>
+            {path && <button className="button danger small" type="button" disabled={busyPath === path} onClick={() => void removePhoto(path)}>{busyPath === path ? "Deleting…" : "Delete photo"}</button>}
+          </div>;
+        })}
+      </div>
+    ) : <p className="muted-cell">{Number(row.bookingPhotoCount ?? 0) === 0 ? "No photos were uploaded for this booking." : "Photos could not be loaded. Refresh and try again."}</p>}
+    {error && <p className="error-text" role="alert" style={{ marginTop: 8 }}>{error}</p>}
+    {Number(row.bookingPhotoCount ?? 0) > urls.length && urls.length > 0 ? <p className="muted-cell">Some photos are unavailable. Refresh and try again.</p> : null}
+  </div>;
+}
+
 function TableRows({ section, row, config, safeAction, pendingId, profiles, technicianProfiles, technicians }: {
   section: SectionKey; row: JsonRow; config: typeof configs[SectionKey];
   safeAction: (action: (formData: FormData) => Promise<void>, id: string, prompt: string) => Promise<void>;
@@ -184,10 +225,9 @@ function TableRows({ section, row, config, safeAction, pendingId, profiles, tech
     </td>; })}<td><DetailsDialog><div style={{ display: "grid", gap: 12 }}>
       {section === "users" && <div><strong>Profile photo</strong><div style={{ marginTop: 8, width: 88, height: 88, borderRadius: "50%", overflow: "hidden", display: "grid", placeItems: "center", background: "#e4f3f2", color: "var(--deep)", fontWeight: 800 }}>{typeof row.avatar_url === "string" && row.avatar_url ? <Image src={row.avatar_url} alt={`${String(row.full_name || "User")} profile photo`} width={88} height={88} unoptimized style={{ width: 88, height: 88, objectFit: "cover" }} /> : String(row.full_name || "U").split(/\s+/).map((part) => part[0]).join("").slice(0, 2).toUpperCase()}</div></div>}
       {fields.map(([label, value]) => <div key={label} className="muted-cell"><strong style={{ color: "var(--ink)" }}>{label}:</strong> {value}</div>)}
-      {section === "bookings" && <div><strong>Uploaded booking photos</strong>{(row.bookingPhotoUrls as string[] | undefined)?.length ? <div className="inline-actions" style={{ marginTop: 8 }}>{(row.bookingPhotoUrls as string[]).map((src, index) => <a key={`${src}-${index}`} href={src} target="_blank" rel="noreferrer" aria-label={`Open booking photo ${index + 1}`}><Image src={src} alt={`Booking photo ${index + 1}`} width={96} height={96} unoptimized style={{ width: 96, height: 96, objectFit: "cover", borderRadius: 8 }} /></a>)}</div> : <p className="muted-cell">{Number(row.bookingPhotoCount ?? 0) === 0 ? "No photos were uploaded for this booking." : "Photos could not be loaded. Refresh and try again."}</p>}{Number(row.bookingPhotoCount ?? 0) > Number((row.bookingPhotoUrls as string[] | undefined)?.length ?? 0) && Number((row.bookingPhotoUrls as string[] | undefined)?.length ?? 0) > 0 ? <p className="muted-cell">Some photos are unavailable. Refresh and try again.</p> : null}</div>}
+      {section === "bookings" && <BookingPhotos row={row} /> }
       {section === "users" ? addresses?.length ? <div><strong>Saved addresses</strong>{addresses.map((address) => <p className="muted-cell" key={String(address.id)}>{String(address.label)}{address.is_default ? " · Default" : ""}: {String(address.line)}{address.city ? `, ${String(address.city)}` : ""}{address.pincode ? ` ${String(address.pincode)}` : ""}</p>)}</div> : <p className="muted-cell">No saved addresses.</p> : null}
       {related?.length ? <div><strong>{section === "technicians" ? "Booking history" : "Booking history"}</strong>{related.map((booking) => <p className="muted-cell" key={String(booking.id)}>{String(booking.code ?? booking.id)} · {String(booking.status)} · {String(booking.scheduled_date)}</p>)}</div> : null}
-      {section === "users" && <ProfileEditor row={row} />}
       {section === "users" && row.canChangeRole === false && <p className="muted-cell">Your own role cannot be changed in the Admin Panel.</p>}
       {section === "users" && row.canChangeRole === true && <ProfileRoleEditor row={row} />}
       {section === "technicians" && <TechnicianEditor row={row} profiles={technicianProfiles} />}
