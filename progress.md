@@ -64,3 +64,10 @@ npm run dev
 ```
 
 Open `http://localhost:3000`. Configure the public Supabase URL/anon key and the server-only service-role variable as described in [README.md](README.md).
+
+## Latest requested fixes
+
+- **Services:** the admin Service editor now supports PNG/JPEG/WebP service image upload, preview, replacement, and removal. Existing service images are preserved when saving unrelated fields.
+- **Home banner:** Settings now has a Home banner editor backed by `app_settings.home_banner_url` and the existing public `service-assets` bucket. Uploading replaces the current banner; Remove clears it.
+- **City defaults:** the included one-time migration changes defaults for newly inserted `profiles.city` and `addresses.city` rows to `Greater Noida`, Uttar Pradesh. Existing city values are intentionally left unchanged.
+- **Expo note:** the Home banner must also be read by the separate Expo app from `app_settings.home_banner_url`; this admin ZIP does not contain the Expo source. The requested Home location popup/current-location behavior is likewise an Expo-side change, not an Admin Panel change.

@@ -3,7 +3,7 @@
 import Image from "next/image";
 import { useRef, useState } from "react";
 import { useRouter } from "next/navigation";
-import { savePaymentSettings } from "@/lib/mutations";
+import { saveHomeBanner, savePaymentSettings } from "@/lib/mutations";
 
 type PaymentSettings = { upi_id: string | null; upi_enabled: boolean; qr_code_url: string | null };
 
@@ -48,6 +48,50 @@ export function PaymentSettingsEditor({ settings }: { settings: PaymentSettings 
       {message && <p className="success-text" role="status">{message}</p>}
       {errorMessage && <p className="error-text" role="alert">{errorMessage}</p>}
       <div className="dialog-foot" style={{ padding: "12px 0 0", border: 0 }}><button className="button" disabled={busy}>{busy ? "Saving…" : "Save payment settings"}</button></div>
+    </form>
+  </section>;
+}
+
+
+export function HomeBannerEditor({ bannerUrl }: { bannerUrl: string | null }) {
+  const router = useRouter();
+  const fileRef = useRef<HTMLInputElement>(null);
+  const [currentUrl, setCurrentUrl] = useState(bannerUrl ?? "");
+  const [message, setMessage] = useState("");
+  const [errorMessage, setErrorMessage] = useState("");
+  const [busy, setBusy] = useState(false);
+
+  async function submit(event: React.FormEvent<HTMLFormElement>) {
+    event.preventDefault(); setBusy(true); setMessage(""); setErrorMessage("");
+    const formData = new FormData();
+    const file = fileRef.current?.files?.[0];
+    if (file) formData.set("home_banner_file", file);
+    try {
+      const saved = await saveHomeBanner(formData);
+      setCurrentUrl(saved.banner_url ?? "");
+      if (fileRef.current) fileRef.current.value = "";
+      setMessage("Home banner saved."); router.refresh();
+    } catch (error) {
+      setErrorMessage(error instanceof Error ? error.message : "Could not save the home banner.");
+    } finally { setBusy(false); }
+  }
+
+  async function remove() {
+    setBusy(true); setMessage(""); setErrorMessage("");
+    const formData = new FormData(); formData.set("remove_home_banner", "true");
+    try { const saved = await saveHomeBanner(formData); setCurrentUrl(saved.banner_url ?? ""); setMessage("Home banner removed."); router.refresh(); }
+    catch (error) { setErrorMessage(error instanceof Error ? error.message : "Could not remove the home banner."); }
+    finally { setBusy(false); }
+  }
+
+  return <section className="card" style={{ maxWidth: 680, marginTop: 16 }}>
+    <div className="card-title">Home banner</div>
+    <form className="card-body" onSubmit={submit} style={{ display: "grid", gap: 14 }}>
+      <div className="form-field"><label htmlFor="home-banner-file">Banner image</label><input ref={fileRef} id="home-banner-file" className="field" type="file" accept="image/png,image/jpeg,image/webp" /><span className="muted-cell">PNG, JPEG, or WebP · maximum 3 MB. Uploading a new image replaces the current banner.</span></div>
+      {currentUrl ? <div><div className="stat-label">Current banner</div><Image src={currentUrl} alt="Current home banner" width={640} height={240} unoptimized style={{ width: "100%", maxWidth: 640, height: 240, objectFit: "cover", marginTop: 8, borderRadius: 10, border: "1px solid var(--line)" }} /></div> : <p className="muted-cell">No custom banner configured. The app should use its existing fallback banner.</p>}
+      {message && <p className="success-text" role="status">{message}</p>}
+      {errorMessage && <p className="error-text" role="alert">{errorMessage}</p>}
+      <div className="dialog-foot" style={{ padding: "12px 0 0", border: 0, justifyContent: "flex-start" }}><button className="button" disabled={busy}>{busy ? "Saving…" : "Save banner"}</button>{currentUrl && <button className="button danger" type="button" disabled={busy} onClick={() => void remove()}>{busy ? "Working…" : "Remove banner"}</button>}</div>
     </form>
   </section>;
 }

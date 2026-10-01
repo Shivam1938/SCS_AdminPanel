@@ -20,6 +20,7 @@ function EditorDialog({ title, buttonLabel, children, className = "button second
 
 const serviceSchema = z.object({
   id: z.string().min(1, "Required"), name: z.string().min(1, "Required"), description: z.string(), icon: z.string(),
+  image_url: z.string().optional(),
   price: z.coerce.number().int().min(0), rating: z.coerce.number().min(0).max(5).nullable(),
   bookings_count: z.coerce.number().int().min(0).nullable(), tint: z.string(), color: z.string(), active: z.boolean(), sort: z.coerce.number().int().nullable(),
 });
@@ -27,17 +28,22 @@ type ServiceValues = z.infer<typeof serviceSchema>;
 export function ServiceEditor({ row }: { row?: JsonRow }) {
   const [message, setMessage] = useState("");
   const [busy, setBusy] = useState(false);
+  const [imagePreview, setImagePreview] = useState(String(row?.image_url ?? ""));
   const router = useRouter();
   const form = useForm<z.input<typeof serviceSchema>, unknown, ServiceValues>({ resolver: zodResolver(serviceSchema), defaultValues: {
     id: String(row?.id ?? ""), name: String(row?.name ?? ""), description: String(row?.description ?? ""), icon: String(row?.icon ?? ""),
     price: Number(row?.price ?? 0), rating: row?.rating == null ? null : Number(row.rating),
     bookings_count: row?.bookings_count == null ? null : Number(row.bookings_count), tint: String(row?.tint ?? ""), color: String(row?.color ?? ""),
-    active: row ? Boolean(row.active) : true, sort: row?.sort == null ? null : Number(row.sort),
+    active: row ? Boolean(row.active) : true, sort: row?.sort == null ? null : Number(row.sort), image_url: String(row?.image_url ?? ""),
   } });
   async function submit(values: ServiceValues) {
     setBusy(true); setMessage("");
     const payload = new FormData(); Object.entries(values).forEach(([key, value]) => payload.set(key, value === null ? "" : String(value)));
     payload.set("intent", row ? "update" : "create");
+    const file = (document.getElementById(`service-image-${row?.id ?? "new"}`) as HTMLInputElement | null)?.files?.[0];
+    if (file) payload.set("service_image", file);
+    const removeImage = document.getElementById(`remove-service-image-${row?.id ?? "new"}`) as HTMLInputElement | null;
+    if (removeImage?.checked && !file) payload.set("remove_service_image", "true");
     try { await saveService(payload); setMessage("Service saved."); router.refresh(); }
     catch (error) { setMessage(error instanceof Error ? error.message : "Could not save service."); }
     finally { setBusy(false); }
@@ -56,6 +62,7 @@ export function ServiceEditor({ row }: { row?: JsonRow }) {
       <div className="form-field"><label htmlFor="service-color">Color</label><input id="service-color" className="field" {...form.register("color")} /></div>
       <label className="check-row"><input type="checkbox" {...form.register("active")} /> Active</label>
       <div className="form-field full"><label htmlFor="service-description">Description</label><textarea id="service-description" className="field" {...form.register("description")} /></div>
+      <div className="form-field full"><label htmlFor={`service-image-${row?.id ?? "new"}`}>Service image</label><input id={`service-image-${row?.id ?? "new"}`} className="field" type="file" accept="image/png,image/jpeg,image/webp" onChange={(event) => { const file = event.target.files?.[0]; if (file) setImagePreview(URL.createObjectURL(file)); }} /><span className="muted-cell">PNG, JPEG, or WebP · maximum 2 MB. The image is used on the service card when configured.</span>{imagePreview ? <div style={{ marginTop: 8 }}><Image unoptimized src={imagePreview} alt="Service image preview" width={180} height={110} style={{ width: 180, height: 110, objectFit: "cover", borderRadius: 10, border: "1px solid var(--line)" }} /></div> : <span className="muted-cell">No service image configured. The app can fall back to its icon.</span>}{row?.image_url ? <label className="check-row" style={{ marginTop: 8 }}><input id={`remove-service-image-${row.id}`} type="checkbox" /> Remove current image</label> : null}</div>
     </div>{message && <p className={message === "Service saved." ? "success-text" : "error-text"} role={message === "Service saved." ? "status" : "alert"}>{message}</p>}
       <div className="dialog-foot" style={{ padding: "18px 0 0", border: 0 }}><button className="button secondary" type="button" onClick={(event) => event.currentTarget.closest("dialog")?.close()}>Cancel</button><button className="button" disabled={busy}>{busy ? "Saving…" : "Save service"}</button></div>
     </form>
@@ -106,7 +113,7 @@ const createProfileUserSchema = z.object({
 type CreateProfileUserValues = z.infer<typeof createProfileUserSchema>;
 export function CreateProfileUserEditor() {
   const [message, setMessage] = useState(""); const [busy, setBusy] = useState(false); const router = useRouter();
-  const form = useForm<CreateProfileUserValues>({ resolver: zodResolver(createProfileUserSchema), defaultValues: { name: "", email: "", phone: "", city: "", role: "customer", password: "" } });
+  const form = useForm<CreateProfileUserValues>({ resolver: zodResolver(createProfileUserSchema), defaultValues: { name: "", email: "", phone: "", city: "Greater Noida", role: "customer", password: "" } });
   async function submit(values: CreateProfileUserValues) {
     setBusy(true); setMessage(""); const payload = new FormData(); Object.entries(values).forEach(([key, value]) => payload.set(key, value));
     try {
@@ -319,7 +326,7 @@ type AddressValues = z.infer<typeof addressSchema>;
 export function AddressEditor({ row, profiles }: { row?: JsonRow; profiles: { id: string; full_name: string | null }[] }) {
   const [message, setMessage] = useState(""); const [busy, setBusy] = useState(false); const router = useRouter();
   const form = useForm<AddressValues>({ resolver: zodResolver(addressSchema), defaultValues: {
-    user_id: String(row?.user_id ?? ""), label: String(row?.label ?? ""), line: String(row?.line ?? ""), city: String(row?.city ?? ""), pincode: String(row?.pincode ?? ""), is_default: Boolean(row?.is_default),
+    user_id: String(row?.user_id ?? ""), label: String(row?.label ?? ""), line: String(row?.line ?? ""), city: String(row?.city ?? "Greater Noida"), pincode: String(row?.pincode ?? ""), is_default: Boolean(row?.is_default),
   } });
   async function submit(values: AddressValues) {
     setBusy(true); setMessage(""); const payload = new FormData(); Object.entries(values).forEach(([key, value]) => payload.set(key, String(value)));

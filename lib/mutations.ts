@@ -609,6 +609,53 @@ export async function deleteTechnician(formData: FormData) {
   revalidatePath("/admin");
 }
 
+export async function saveHomeBanner(formData: FormData): Promise<{ banner_url: string | null }> {
+  const { user } = await requireAdmin();
+  const admin = createAdminClient();
+  const { data: current, error: lookupError } = await admin
+    .from("app_settings")
+    .select("id, home_banner_url")
+    .eq("id", "global")
+    .maybeSingle();
+  if (lookupError) throw new Error(`Could not load home banner settings: ${lookupError.message}`);
+
+  const file = formData.get("home_banner_file");
+  let bannerUrl = current?.home_banner_url ?? null;
+  let uploadedPath: string | null = null;
+  if (file instanceof File && file.size > 0) {
+    const extensions: Record<string, string> = { "image/png": "png", "image/jpeg": "jpg", "image/webp": "webp" };
+    const extension = extensions[file.type];
+    if (!extension) throw new Error("Upload a PNG, JPEG, or WebP home banner image.");
+    if (file.size > 3 * 1024 * 1024) throw new Error("Choose a home banner image smaller than 3 MB.");
+    uploadedPath = `home/banner/${randomUUID()}.${extension}`;
+    const { error: uploadError } = await admin.storage.from("service-assets").upload(uploadedPath, await file.arrayBuffer(), { contentType: file.type, upsert: false });
+    if (uploadError) throw new Error("Could not upload the home banner image. Please try again.");
+    bannerUrl = admin.storage.from("service-assets").getPublicUrl(uploadedPath).data.publicUrl;
+  }
+
+  const removeBanner = text(formData, "remove_home_banner") === "true";
+  if (removeBanner && !uploadedPath) bannerUrl = null;
+
+  const values = { home_banner_url: bannerUrl, updated_at: new Date().toISOString(), updated_by: user.id };
+  const result = current
+    ? await admin.from("app_settings").update(values).eq("id", "global")
+    : await admin.from("app_settings").insert({ id: "global", ...values });
+  if (result.error) {
+    if (uploadedPath) await admin.storage.from("service-assets").remove([uploadedPath]);
+    throw new Error(`Could not save home banner settings: ${result.error.message}`);
+  }
+
+  if ((uploadedPath || removeBanner) && current?.home_banner_url) {
+    const oldPath = String(current.home_banner_url).split("/storage/v1/object/public/service-assets/")[1]?.split("?")[0];
+    if (oldPath && oldPath !== uploadedPath) {
+      const { error: removeError } = await admin.storage.from("service-assets").remove([decodeURIComponent(oldPath)]);
+      if (removeError) console.warn("Could not remove the replaced home banner image:", removeError.message);
+    }
+  }
+  revalidatePath("/admin/settings");
+  return { banner_url: bannerUrl };
+}
+
 export async function saveService(formData: FormData) {
   const id = text(formData, "id");
   const input = z
@@ -687,10 +734,10 @@ if (!isCreate) {
   }
 
   const finalImageUrl = serviceImageUrl
-  ? serviceImageUrl
-  : removeServiceImage
-    ? null
-    : input.image_url ?? currentImageUrl;
+    ? serviceImageUrl
+    : removeServiceImage
+      ? null
+      : input.image_url || currentImageUrl;
   const payload = {
     ...input,
     sort,

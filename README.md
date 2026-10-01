@@ -1,6 +1,12 @@
 # SCS Admin Panel
 
-The SCS Admin Panel is a standalone Next.js App Router application for administering the existing Sunshine Computer Solution mobile app and its Supabase project. It reads and updates the existing public schema; it does not add tables or run migrations.
+The SCS Admin Panel is a standalone Next.js App Router application for administering the Sunshine Computer Solution mobile app and its Supabase project. It includes a small Supabase migration for Home banner settings and the SCS default service area.
+
+## One-time Supabase migration
+
+Run `supabase/migrations/20261001_home_banner_and_city.sql` once in the Supabase SQL Editor. It creates `app_settings` for the Home banner and changes the default city for newly inserted `profiles` and `addresses` rows to Greater Noida. Existing city values are not overwritten.
+
+The Expo app must also read `app_settings.home_banner_url` to display the custom banner; this admin ZIP does not contain the separate Expo app source.
 
 ## Start the panel
 
@@ -37,13 +43,13 @@ Admin access is determined by the authenticated user's UUID matching `profiles.i
 - **Dashboard:** live counts and recent records from Supabase, booking status distribution, and booking totals grouped by the stored payment status. No sample production statistics are used.
 - **Users & profiles:** list/search/filter profiles, view profile details, addresses and booking history, edit `full_name`, `phone`, and `city`, change another profile's role (`customer`, `admin`, or `technician`), create an Auth user and profile, and delete an Auth user. Auth email is not stored in `profiles`.
 - **Technicians:** add standalone technician records or link a profile, view booking history, edit the existing technician fields, and delete a technician record. A technician record is separate from the profile role; linking a customer profile assigns `profiles.role = technician`.
-- **Services:** add, view, edit, and delete services. The editor uses the existing `id`, `name`, `description`, `icon`, `price`, `rating`, `bookings_count`, `tint`, `color`, `active`, and `sort` fields.
+- **Services:** add, view, edit, and delete services, including service image upload/replace/remove. Images are stored in the existing public `service-assets` bucket; PNG/JPEG/WebP files up to 2 MB are accepted.
 - **Bookings:** view booking/customer/service/technician details, edit scheduling, address, notes, technician assignment, and booking amounts; cancel bookings in the states supported by the current action; or delete a booking. Status, payment method, and payment status are not changed by the editor because their complete allowed values are not established here.
 - **Payments:** read-only view of the existing payment fields on `bookings`. There is no separate payment ledger table in the supplied schema.
 - **Reviews:** view, edit rating/comment/tags, and delete review records.
 - **Notifications:** create in-app notification records, view/edit them, mark them read, or delete them. This does not send push notifications; the schema/project has no push delivery API.
 - **Addresses:** add, view, edit, and delete saved addresses linked to UUID profiles.
-- **Settings:** view the signed-in admin's Auth email and profile details, and edit their profile fields without changing their role.
+- **Settings:** manage online UPI payment settings, the Home banner image, and the signed-in admin profile. Home banner images use the existing public `service-assets` bucket and are stored in `app_settings.home_banner_url`.
 
 Tables and UUID links follow the supplied schema. In particular, the legacy `users.id` is an integer and is not treated as related to UUID profile IDs. Services use text IDs; technician, booking, review, notification, address, and profile identifiers use the supplied UUID fields.
 
